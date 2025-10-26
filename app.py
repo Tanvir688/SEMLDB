@@ -99,10 +99,10 @@ def RunSimulation():
 
     data = request.get_json()
     print(data)
-    device_type = data.get('device_type')
+    device_type = data.get('device')
 
     if not device_type:
-        return jsonify({"message": "Missing 'device_type' in request body."}), 400
+        return jsonify({"message": "Missing 'device' in request body."}), 400
 
     # Extract device-specific parameters
     parameters = data.get('parameters', {})
@@ -116,7 +116,7 @@ def RunSimulation():
         simulation_func = device['simulation_func']
 
         if not simulation_func:
-            return jsonify({"message": f"No ML model defined for device type '{device_type}'."}), 400
+            return jsonify({"message": f"No ML model defined for device '{device_type}'."}), 400
 
         simulation_data = simulation_func(parameters)
 
