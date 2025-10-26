@@ -136,19 +136,6 @@ class LatentSpacePolyNN(nn.Module):
         out = self.linear(x)
         return out
 
-def convert_map_tensor_to_list(data_loader):
-    input_list = []
-    latent_list = []
-    for batch in data_loader:
-        input_tensor, latent_tensor = batch
-        input_list.append(tensor_to_numpy(input_tensor))
-        latent_list.append(tensor_to_numpy(latent_tensor))
-
-    input_np = np.vstack(input_list)
-    latent_np = np.vstack(latent_list)
-
-    return input_np, latent_np
-
 def get_simulation_data(db_helper, parameters):
     """
     Fetch simulation data with preset condition
