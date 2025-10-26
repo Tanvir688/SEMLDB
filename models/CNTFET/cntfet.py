@@ -83,13 +83,12 @@ def convert_str_to_float(data):
                     pass  # Ignore values that cannot be converted to float
     return data
 
-def get_adjusted_simulation_data(db_helper, sim_type, parameters):
+def get_adjusted_simulation_data(db_helper, parameters):
     """
     Fetch simulation data with adjusted threshold voltage.
     
     Args:
         db_helper: Database helper instance
-        sim_type: Simulation type
         parameters: Device parameters including threshold voltage
         
     Returns:
@@ -108,7 +107,7 @@ def get_adjusted_simulation_data(db_helper, sim_type, parameters):
     db_query_params = {k: v for k, v in parameters.items() if k != 'V_th'}
 
     complete_data, exact_match, distance, matched_params = db_helper.get_simulation_data(
-        'CNTFET', db_query_params, sim_type
+        'CNTFET', db_query_params
     )
     
     if not complete_data:
@@ -144,12 +143,10 @@ def get_adjusted_simulation_data(db_helper, sim_type, parameters):
     # Construct the adjusted data
     adjusted_data = {
         'simulation_data': {
-            sim_type: {
-                'Vg': shifted_vg,
-                'Vd': vd_values,
-                'Id': selected_id,
-                'Qg': selected_qg
-            }
+            'Vg': shifted_vg,
+            'Vd': vd_values,
+            'Id': selected_id,
+            'Qg': selected_qg
         },
         'device_params': complete_data.get('device_params', {})
     }
@@ -318,9 +315,9 @@ def balcntsweep(Cins, dcnt, alpha, Vfb,Vgv, Vdv,Lch=12e-9, draw=False, config=No
 
 @MODELS.register()
 class CNTFET:
-    simulation_func = {'rnn': lambda parameters: run_rnn_sim(parameters, SimulationConfig)}
+    simulation_func = lambda parameters: run_rnn_sim(parameters, SimulationConfig)
     device_params = ['tox', 'Lg', 'eps_ox', 'd_cnt', 'V_th', 'sca_flag']
-    postprocess = staticmethod(get_adjusted_simulation_data)
+    postprocess = get_adjusted_simulation_data
 
 
 if __name__ == "__main__":

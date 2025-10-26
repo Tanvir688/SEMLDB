@@ -126,21 +126,19 @@ def convert_map_tensor_to_list(data_loader):
 
     return input_np, latent_np
 
-def get_simulation_data(db_helper, sim_type, parameters):
+def get_simulation_data(db_helper, parameters):
     """
     Fetch simulation data with preset condition
     """
     complete_data, exact_match, distance, matched_params = db_helper.get_simulation_data(
-        'NMOS', parameters, sim_type
+        'NMOS', parameters
     )
     
     if not complete_data:
         return None, False, None, None
     
     adjusted_data = {
-        'simulation_data': {
-            sim_type: complete_data.get('simulation_data', {})
-        },
+        'simulation_data': complete_data.get('simulation_data', {}),
         'device_params': complete_data.get('device_params', {})
     }
     
@@ -232,6 +230,6 @@ def run_AE_sim(parameters):
 
 @MODELS.register()
 class NMOS:
-    simulation_func = {'autoencoder': run_AE_sim}
+    simulation_func = run_AE_sim
     device_params = ['Lg', 'THF', 'XjSD']
-    postprocess = staticmethod(get_simulation_data)
+    postprocess = get_simulation_data

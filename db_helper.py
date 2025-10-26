@@ -39,7 +39,7 @@ class DBHelper:
             query[f'device_params.{key}'] = value
         return self.collection.find_one(query)
 
-    def get_simulation_data(self, device_type, parameters, simulation_type):
+    def get_simulation_data(self, device_type, parameters):
         """
         Retrieves device simulation data based on device, device_params, and simulation type.
         First tries exact match, then finds nearest if no exact match exists.
@@ -47,7 +47,6 @@ class DBHelper:
         Args:
             device_type (str): Type of the device
             parameters (dict): Device parameters to match
-            simulation_type (str): Type of simulation data to retrieve
         
         Returns:
             tuple: (complete_device_data, exact_match, distance, matched_params)
@@ -58,12 +57,11 @@ class DBHelper:
         device = self.get_devices_by_parameters(device_type, parameters)
         
         if device:
-            simulation_data = device.get('simulation_data', {}).get(simulation_type, {})
+            simulation_data = device.get('simulation_data', {})
             if simulation_data:
                 # Create a complete data item
                 complete_data = {
                     "device": device.get('device'),
-                    "simulation_type": simulation_type,
                     "device_params": device.get('device_params', {}),
                     "simulation_data": simulation_data
                 }
@@ -80,12 +78,11 @@ class DBHelper:
         if nearest_id:
             device = self.collection.find_one({"_id": nearest_id})
             if device:
-                simulation_data = device.get('simulation_data', {}).get(simulation_type, {})
+                simulation_data = device.get('simulation_data', {})
                 if simulation_data:
                     # Create a complete data item for the nearest match
                     complete_data = {
                         "device": device.get('device'),
-                        "simulation_type": simulation_type,
                         "device_params": device.get('device_params', {}),
                         "simulation_data": simulation_data
                     }
