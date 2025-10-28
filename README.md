@@ -4,9 +4,169 @@ Semiconductor device simulation using machine learning models. Supports multiple
 
 ## Quick Start
 ## Table of Contents
+- [API Usage](#api-usage)
 - [Installation and Usage](#installation-and-usage)
 - [Adding a New Device](#adding-a-new-device)
 - [Testing Your Device](#testing-your-device)
+
+---
+
+## API Usage
+
+semldb provides a RESTful API for running device simulations remotely. This is useful for web applications, cloud-based workflows, or when you want to access the simulation engine without installing Python locally.
+
+### API Endpoint
+
+```
+POST https://semldb.rc.ufl.edu:443/run_simulation
+```
+
+### Request Format
+
+Send a POST request with JSON payload:
+
+```python
+import requests
+import json
+import numpy as np
+
+# API configuration
+server_url = 'https://semldb.rc.ufl.edu:443/'
+run_sim_url = f'{server_url}/run_simulation'
+
+# Device parameters
+params = {
+    "device_type": "CNTFET",
+    "parameters": {
+        'tox': 1.9,
+        'eps_ox': 21.0,
+        'Lg': 12,
+        'd_cnt': 1.02,
+        'V_th': 0.258,
+        'sca_flag': 0,
+        'Vg': {
+            'start': 0,
+            'end': 0.5,
+            'step': 81
+        },
+        'Vd': {
+            'start': 0,
+            'end': 0.5,
+            'step': 81
+        }
+    }
+}
+
+# Send request
+response = requests.post(
+    run_sim_url,
+    headers={"Content-Type": "application/json"},
+    data=json.dumps(params),
+    timeout=300
+)
+
+# Parse response
+if response.status_code == 200:
+    complete_data = response.json().get('data', {})
+    simulation_data = complete_data.get('simulation_data', {})
+
+    Vg_data = np.array(simulation_data.get('Vg', []))
+    Vd_data = np.array(simulation_data.get('Vd', []))
+    Id_data = np.array(simulation_data.get('Id', []))
+
+    print(f"Data shape: Vg{Vg_data.shape}, Vd{Vd_data.shape}, Id{Id_data.shape}")
+else:
+    print(f'Request failed: Status code {response.status_code}')
+```
+
+### Response Format
+
+The API returns JSON with the following structure:
+
+```json
+{
+    "data": {
+        "simulation_data": {
+            "Vg": [...],
+            "Vd": [...],
+            "Id": [...]
+        },
+        "device_params": {
+            "tox": 1.9,
+            "eps_ox": 21.0,
+            ...
+        }
+    }
+}
+```
+
+### Retrieving High-Precision Simulation Data
+
+The API also provides access to high-precision simulation data (e.g., NEGF or Synopsys results) stored in the database:
+
+```
+GET https://semldb.rc.ufl.edu:443/simulation_data
+```
+
+**Example:**
+
+```python
+import requests
+
+# Device parameters
+params = {
+    'device': 'CNTFET',
+    'tox': 2.0,
+    'Lg': 12,
+    'eps_ox': 25,
+    'V_th': 0.358,
+    'sca_flag': 1
+}
+
+# Send GET request
+response = requests.get(
+    'https://semldb.rc.ufl.edu:443/simulation_data',
+    params=params,
+    timeout=30
+)
+
+if response.status_code == 200:
+    data = response.json()
+    simulation_data = data.get('simulation_data', {})
+
+    # The API will return exact match or nearest neighbor from database
+    exact_match = data.get('exact_match', False)
+    distance = data.get('distance', None)
+
+    if exact_match:
+        print("Found exact match in database")
+    else:
+        print(f"Nearest match with distance: {distance}")
+        print(f"Matched params: {data.get('matched_params', {})}")
+
+    # Access high-precision data
+    Vg = simulation_data.get('Vg', [])
+    Vd = simulation_data.get('Vd', [])
+    Id = simulation_data.get('Id', [])
+else:
+    print(f'Request failed: Status code {response.status_code}')
+```
+
+**Note:** This endpoint queries the database for pre-computed high-precision simulation results. If no exact match is found, it returns the nearest neighbor based on parameter distance.
+
+### Complete Example: Inverter Circuit Simulation
+
+See [example/sim_inverter.py](example/sim_inverter.py) for a complete circuit simulation example that:
+1. Fetches device characteristics using the API (81×81 grid)
+2. Creates RBF interpolation model for fast device evaluation
+3. Simulates a CNTFET inverter circuit using the model
+4. Plots the transfer characteristics
+
+```bash
+python example/sim_inverter.py
+```
+
+This example demonstrates how to use the API for circuit-level simulation where the device model is called thousands of times during iterative solving.
 
 ---
 
