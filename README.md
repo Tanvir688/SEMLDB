@@ -191,7 +191,7 @@ This creates a symbolic link, so code changes are immediately reflected.
 #### Option 2: Regular Installation
 
 ```bash
-pip install git+https://github.com/QimaoYang/SEMLDB.git
+pip install git+https://github.com/UF-QuantumNanoLab/SEMLDB.git
 ```
 
 ### Basic Usage
