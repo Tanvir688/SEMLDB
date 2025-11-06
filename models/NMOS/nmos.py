@@ -201,13 +201,13 @@ def run_AE_sim(parameters):
             'Id_Vd': {
                     'Vg': [0.25, 0.5, 0.75, 1.0],
                     'Vd': np.linspace(0.0025, 1, IdVd.shape[1]).tolist(),
-                    'Id': IdVd.tolist(),
+                    'Id': (IdVd*1e6).tolist(),
                 },
             'Id_Vg': {
                     'Vg': np.linspace(0.0025, 1, IdVg.shape[1]).tolist(),
                     'Vd': [0.05, 1.0],
-                    'Id': IdVg.tolist(),
-                    'Id_log': IdVg_log.tolist(),
+                    'Id': (IdVg*1e6).tolist(),
+                    'Id_log': (6+IdVg_log).tolist(),
                 }
         },
         'device_params': parameters
