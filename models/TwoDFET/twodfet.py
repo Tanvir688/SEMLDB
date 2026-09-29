@@ -10,13 +10,15 @@ Device parameters (as exposed to the API / frontend):
     tox        gate oxide thickness [nm]   (trained domain: 1 - 3 nm)
     Lg         gate length [nm]            (trained domain: 6 - 30 nm)
     eps_ox     oxide dielectric constant   (trained domain: 4 - 25)
-    material   MoS2 / MoSe2                -> meff 0.5 / 0.6 [m0]
+    material   MoS2 / MoSe2 / WS2 / WSe2   -> meff 0.60 / 0.50 / 0.46 / 0.44 [m0]
     transport  fixed to ballistic          -> D = 0 [eV^2]
     V_th       threshold voltage [V]       (reference 0.20, range 0.10 - 0.35)
 
 Voltage sweeps:
-    Vg [V]  (trained domain: -0.15 - 0.6)
-    Vd [V]  (trained domain: 0.001 - 0.501)
+    nFET Vg/Vd use the existing positive-bias convention.
+    WSe2 pFET Vg/Vd use negative physical terminal voltages at the API.
+    The pFET boundary adapter mirrors those voltages into the unchanged
+    positive electron-equivalent model/database domain.
 
 Outputs (dataset units):
     Id [A/m] (numerically equal to uA/um), shape [len(Vg), len(Vd)]
@@ -270,9 +272,13 @@ def parse_voltage_input(v_input):
     raise ValueError("Unsupported voltage input type: %s" % type(v_input))
 
 
-# Channel material dropdown: the frontend sends the option index.
-MATERIALS = ['MoS2', 'MoSe2']
-MATERIAL_MEFF = [0.5, 0.6]  # [m0], aligned with MATERIALS
+# Channel material dropdown: the frontend sends the option index. Keep this
+# order aligned with the frontend labels. WSe2 is exposed as a physically
+# signed pFET while its stored/trained representation remains the unchanged
+# positive electron-equivalent reference.
+MATERIALS = ['MoS2', 'MoSe2', 'WS2', 'WSe2']
+MATERIAL_MEFF = [0.60, 0.50, 0.46, 0.44]  # [m0], aligned with MATERIALS
+PFET_MATERIALS = {'WSe2'}
 
 def _resolve_option(value, options, values, name):
     """Map a dropdown selection (index or option name) to its physical value."""
@@ -295,6 +301,53 @@ def _resolve_meff(parameters):
     return _resolve_option(material, MATERIALS, MATERIAL_MEFF, 'material')
 
 
+def _material_from_meff(meff):
+    """Return the canonical material name for one of the trained masses."""
+    for material, trained_meff in zip(MATERIALS, MATERIAL_MEFF):
+        if np.isclose(float(meff), trained_meff, rtol=0.0, atol=1e-12):
+            return material
+    raise ValueError("Unsupported 2DFET effective mass: %s" % meff)
+
+
+def _material_metadata(meff):
+    """Return canonical material identity and external terminal polarity."""
+    material = _material_from_meff(meff)
+    polarity = -1.0 if material in PFET_MATERIALS else 1.0
+    return material, polarity
+
+
+def _validate_external_pfet_biases(vth, Vg=None, Vd=None):
+    """Reject legacy positive pFET biases at the new signed API boundary."""
+    if vth >= 0.0:
+        raise ValueError("WSe2 pFET requires a negative V_th.")
+    if Vg is not None and np.any(np.asarray(Vg, dtype=float) > 1e-12):
+        raise ValueError("WSe2 pFET requires non-positive Vg values.")
+    if Vd is not None and np.any(np.asarray(Vd, dtype=float) > 1e-12):
+        raise ValueError("WSe2 pFET requires non-positive Vd values.")
+
+
+def _externalize_database_grid(Vg, Vd, Id, Qg, polarity):
+    """Convert an electron-equivalent database grid to the external convention.
+
+    For a pFET, reverse both positive stored axes before negating them so the
+    returned negative Vg/Vd axes remain strictly increasing. Reverse the two
+    corresponding data dimensions and negate Id/Qg at the same boundary.
+    The stored charge contains an arbitrary off-state offset; reference each
+    pFET charge curve to its electron-equivalent Vg=0 row before negation.
+    This guarantees non-positive physical pFET charge without changing Cg.
+    """
+    if polarity > 0.0:
+        return list(Vg), list(Vd), list(Id), list(Qg)
+
+    vg = -np.asarray(Vg, dtype=float)[::-1]
+    vd = -np.asarray(Vd, dtype=float)[::-1]
+    current = -np.asarray(Id, dtype=float)[::-1, ::-1]
+    charge_model = np.asarray(Qg, dtype=float)
+    charge_model = charge_model - charge_model[0:1, :]
+    charge = -charge_model[::-1, ::-1]
+    return vg.tolist(), vd.tolist(), current.tolist(), charge.tolist()
+
+
 def _resolve_D(parameters):
     """The current database and surrogate contain ballistic data only."""
     return 0.0
@@ -315,7 +368,9 @@ def run_simulation(parameters):
     """Run a 2DFET simulation with the NumPy Two-Tower FiLM surrogate.
 
     Expects tox and Lg in nm (converted to m internally for the surrogate).
-    'material' (MoS2 or MoSe2) selects the channel effective mass.
+    'material' selects the channel effective mass for MoS2, MoSe2, WS2, or
+    WSe2. WSe2 accepts negative physical Vg/Vd/V_th values and mirrors them
+    into the same positive electron-equivalent equations used for training.
     Transport is fixed to the ballistic limit (D = 0).
     V_th [V] (reference 0.20) rigidly shifts the transfer characteristics
     along Vg: the model is evaluated at Vg - (V_th - 0.20).
@@ -326,14 +381,24 @@ def run_simulation(parameters):
     eps_ox = parameters.get('eps_ox')
     meff = _resolve_meff(parameters)
     D = _resolve_D(parameters)
-    vth = float(parameters.get('V_th', VTH_REF) or VTH_REF)
-    dvth = vth - VTH_REF
+    material, polarity = _material_metadata(meff)
+    default_vth = polarity * VTH_REF
+    vth_external = float(parameters.get('V_th', default_vth))
 
     if tox is None or Lg is None or eps_ox is None:
         raise ValueError("Missing device parameters: require tox, Lg, eps_ox, material.")
 
     Vg_array = parse_voltage_input(parameters.get('Vg'))
     Vd_array = parse_voltage_input(parameters.get('Vd'))
+    if polarity < 0.0:
+        _validate_external_pfet_biases(vth_external, Vg_array, Vd_array)
+
+    # Model coordinates remain exactly as trained. Multiplication by -1 maps
+    # signed WSe2 terminal values to the positive electron-equivalent domain.
+    vth_model = polarity * vth_external
+    dvth = vth_model - VTH_REF
+    Vg_model = polarity * Vg_array
+    Vd_model = polarity * Vd_array
 
     model = _get_surrogate()
     Id, Q = model.predict_grid(
@@ -342,13 +407,39 @@ def run_simulation(parameters):
         eps_ox=float(eps_ox),
         meff=float(meff),
         D=float(D),
-        Vg=Vg_array - dvth,
-        Vd=Vd_array,
+        Vg=Vg_model - dvth,
+        Vd=Vd_model,
     )
 
+    if polarity < 0.0:
+        # Use the physical Vg=0 state as the pFET charge reference. The
+        # equivalent model coordinate includes the same threshold shift as the
+        # requested sweep. Subtracting this per-Vd constant preserves Cg.
+        _, Q_reference = model.predict_grid(
+            tox=float(tox) * 1e-9,
+            Lg=float(Lg) * 1e-9,
+            eps_ox=float(eps_ox),
+            meff=float(meff),
+            D=float(D),
+            Vg=np.array([-dvth], dtype=float),
+            Vd=Vd_model,
+        )
+        Q = Q - Q_reference
+
+    # Restore the physical terminal convention at the API boundary. Because
+    # both the pFET voltage and response signs are mirrored, dId/dVg and
+    # dQg/dVg remain positive without taking absolute values.
+    Id = polarity * Id
+    Q = polarity * Q
+
     device_params = dict(parameters)
+    device_params['material'] = material
     device_params['meff'] = meff  # resolved from 'material'
     device_params['D'] = D        # fixed ballistic value
+    device_params['V_th'] = vth_external
+    device_params['polarity'] = int(polarity)
+    device_params['device_type'] = 'pFET' if polarity < 0.0 else 'nFET'
+    device_params['bias_convention'] = 'physical_signed'
 
     return {
         'simulation_data': {
@@ -361,21 +452,89 @@ def run_simulation(parameters):
     }
 
 
+def _format_database_document(device):
+    """Return the public database response shape for one MongoDB document."""
+    if not device:
+        return None
+
+    simulation_data = device.get('simulation_data', {})
+    if not simulation_data:
+        return None
+
+    return {
+        'device': device.get('device'),
+        'device_params': device.get('device_params', {}),
+        'simulation_data': simulation_data,
+    }
+
+
+def _get_material_scoped_simulation_data(db_helper, parameters):
+    """Find a 2DFET record without crossing material or transport axes.
+
+    This device-local query preserves SEMLDB's low-coupling contract: the
+    shared DBHelper remains unchanged, while nearest-geometry fallback is
+    restricted to records with the requested effective mass and scattering
+    parameter.
+    """
+    exact_query = {'device': '2DFET'}
+    exact_query.update({
+        'device_params.%s' % key: value
+        for key, value in parameters.items()
+    })
+
+    device = db_helper.collection.find_one(exact_query)
+    complete_data = _format_database_document(device)
+    if complete_data:
+        return complete_data, True, None, parameters
+
+    scoped_query = {
+        'device': '2DFET',
+        'device_params.meff': parameters['meff'],
+        'device_params.D': parameters['D'],
+    }
+    available_params = list(db_helper.collection.find(
+        scoped_query,
+        {'_id': 1, 'device_params': 1},
+    ))
+    if not available_params:
+        return None, False, None, None
+
+    nearest_id, nearest_params, distance = db_helper.find_nearest_parameters(
+        parameters,
+        available_params,
+    )
+    if nearest_id is None:
+        return None, False, None, None
+
+    device = db_helper.collection.find_one({'_id': nearest_id})
+    complete_data = _format_database_document(device)
+    if not complete_data:
+        return None, False, None, None
+
+    return complete_data, False, distance, nearest_params
+
+
 def get_simulation_data(db_helper, parameters):
     """Fetch pre-computed 2DFET simulation data from the database (SiFET-style).
 
     'material' is translated to meff, and D is fixed to zero for ballistic
     transport, matching the current database.
     V_th is not a database axis: the stored grid is wider (-0.15..0.6 V) than
-    the fixed 0..0.5 V display window; the window is slid by the Vth shift
-    over the stored rows, then relabeled back to 0..0.5 V. The margin rows
-    absorb shifts of V_th in [0.10, 0.35] around the 0.20 reference.
+    the fixed 0..0.5 V electron-equivalent display window. WSe2 accepts a
+    negative physical threshold, converts its magnitude for window selection,
+    then returns signed, increasing negative axes and signed Id/Qg.
     """
     parameters = convert_str_to_float(parameters)
-    vth = float(parameters.get('V_th', VTH_REF) or VTH_REF)
-    vth = min(max(vth, VTH_MIN), VTH_MAX)
-    vth_shift = vth - VTH_REF
     meff = _resolve_meff(parameters)
+    material, polarity = _material_metadata(meff)
+    default_vth = polarity * VTH_REF
+    vth_external = float(parameters.get('V_th', default_vth))
+    if polarity < 0.0:
+        _validate_external_pfet_biases(vth_external)
+    vth_model = polarity * vth_external
+    vth_model = min(max(vth_model, VTH_MIN), VTH_MAX)
+    vth_external = polarity * vth_model
+    vth_shift = vth_model - VTH_REF
     D = _resolve_D(parameters)
 
     db_query_params = {k: v for k, v in parameters.items()
@@ -384,7 +543,7 @@ def get_simulation_data(db_helper, parameters):
     db_query_params['D'] = D
 
     complete_data, exact_match, distance, matched_params = \
-        db_helper.get_simulation_data('2DFET', db_query_params)
+        _get_material_scoped_simulation_data(db_helper, db_query_params)
 
     if not complete_data:
         return None, False, None, None
@@ -408,22 +567,32 @@ def get_simulation_data(db_helper, parameters):
     # Relabel the window back to the fixed 0..0.5 V axis
     shifted_vg = [round(vg + vth_shift, 4) + 0.0 for vg in selected_vg]  # +0.0 normalizes -0.0
 
+    response_vg, response_vd, response_id, response_qg = \
+        _externalize_database_grid(
+            shifted_vg,
+            vd_values,
+            selected_id,
+            selected_qg,
+            polarity,
+        )
+
     simulation_data = {
-        'Vg': shifted_vg,
-        'Vd': vd_values,
-        'Id': selected_id,
-        'Qg': selected_qg,
-        'nVg': len(shifted_vg),
-        'nVd': len(vd_values),
+        'Vg': response_vg,
+        'Vd': response_vd,
+        'Id': response_id,
+        'Qg': response_qg,
+        'nVg': len(response_vg),
+        'nVd': len(response_vd),
     }
 
     device_params = dict(complete_data.get('device_params', {}))
-    device_params['V_th'] = vth
-    if 'meff' in device_params:
-        try:
-            device_params['material'] = MATERIALS[MATERIAL_MEFF.index(device_params['meff'])]
-        except ValueError:
-            pass
+    device_params['V_th'] = vth_external
+    device_params['material'] = material
+    device_params['meff'] = meff
+    device_params['D'] = D
+    device_params['polarity'] = int(polarity)
+    device_params['device_type'] = 'pFET' if polarity < 0.0 else 'nFET'
+    device_params['bias_convention'] = 'physical_signed'
     adjusted_data = {
         'simulation_data': simulation_data,
         'device_params': device_params,
