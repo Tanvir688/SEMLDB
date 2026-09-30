@@ -316,6 +316,13 @@ def _material_metadata(meff):
     return material, polarity
 
 
+def _resolve_vth(parameters, polarity):
+    """Return the supplied threshold or the polarity-aware default."""
+    default_vth = polarity * VTH_REF
+    value = parameters.get('V_th')
+    return default_vth if value is None else float(value)
+
+
 def _validate_external_pfet_biases(vth, Vg=None, Vd=None):
     """Reject legacy positive pFET biases at the new signed API boundary."""
     if vth >= 0.0:
@@ -382,8 +389,7 @@ def run_simulation(parameters):
     meff = _resolve_meff(parameters)
     D = _resolve_D(parameters)
     material, polarity = _material_metadata(meff)
-    default_vth = polarity * VTH_REF
-    vth_external = float(parameters.get('V_th', default_vth))
+    vth_external = _resolve_vth(parameters, polarity)
 
     if tox is None or Lg is None or eps_ox is None:
         raise ValueError("Missing device parameters: require tox, Lg, eps_ox, material.")
@@ -527,8 +533,7 @@ def get_simulation_data(db_helper, parameters):
     parameters = convert_str_to_float(parameters)
     meff = _resolve_meff(parameters)
     material, polarity = _material_metadata(meff)
-    default_vth = polarity * VTH_REF
-    vth_external = float(parameters.get('V_th', default_vth))
+    vth_external = _resolve_vth(parameters, polarity)
     if polarity < 0.0:
         _validate_external_pfet_biases(vth_external)
     vth_model = polarity * vth_external
